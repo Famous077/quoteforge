@@ -12,6 +12,7 @@ uv run run_demo.py                 # scenario 1: stops at the send_quote approva
 uv run run_demo.py --scenario 3    # target price below margin floor: stops at request_margin_approval
 uv run run_demo.py --approve       # approve every gate in the run (or --deny)
 uv run --project . pytest ../sandbox/tests   # costing and nesting tests
+uv run warmup.py                   # before a live demo: warm a sandbox, then run_demo.py --session <id>
 ```
 
 - Model provider is `MODEL_PROVIDER` in `.env` (`openai` or `truefoundry`). To switch to the TrueFoundry gateway, set it to `truefoundry`, fill `TFY_*`, and re-run `setup.py`.
