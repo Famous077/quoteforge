@@ -24,13 +24,51 @@ def env(name: str, default: str = "") -> str:
 
 
 def model_name(model_id: str) -> str:
-    # TrueForge resource names are lowercase slugs; the gateway id is sent upstream unchanged.
+    # TrueForge resource names are lowercase slugs; the model id is sent upstream unchanged.
     return re.sub(r"[^a-z0-9]+", "-", model_id.lower()).strip("-")[:64]
 
 
-def build_spec(model_fqn: str, sandbox: bool) -> dict:
+# MODEL_PROVIDER picks one; each reads its own key and model id from .env.
+PROVIDERS = {
+    "openai": {"key": "OPENAI_API_KEY", "model": "OPENAI_MODEL_ID", "base_url": None},
+    "truefoundry": {"key": "TFY_API_KEY", "model": "TFY_MODEL_ID", "base_url": "TFY_GATEWAY_BASE_URL"},
+}
+
+
+def provider_manifest(client: httpx.Client, provider: str) -> tuple[dict, dict]:
+    """Return the model provider manifest and the model properties for the configured provider."""
+    cfg = PROVIDERS.get(provider)
+    if cfg is None:
+        sys.exit(f"MODEL_PROVIDER must be one of {', '.join(PROVIDERS)}, got '{provider}'")
+    missing = [v for v in (cfg["key"], cfg["model"], cfg["base_url"]) if v and not env(v)]
+    if missing:
+        sys.exit(f"Skipping model provider and agent: set {', '.join(missing)} in .env")
+
+    model_id = env(cfg["model"])
+    catalog = client.get("/catalogs/model-providers").json()["data"]
+    known = [m for p in catalog if p["type"] == provider for m in p["models"] if m["model_id"] == model_id]
+    properties = known[0]["properties"] if known else {}
+
+    manifest = {
+        "type": provider,
+        "auth": {"api_key": env(cfg["key"])},
+        "models": [{"model_id": model_id, "name": model_name(model_id), "properties": properties}],
+    }
+    if cfg["base_url"]:
+        manifest["base_url"] = env(cfg["base_url"])
+    return manifest, properties
+
+
+def model_params(properties: dict) -> dict:
+    # Reasoning models (GPT-5 family) reject temperature.
+    if "low" in properties.get("reasoning_efforts", []):
+        return {"reasoning_effort": "low"}
+    return {"temperature": 0}
+
+
+def build_spec(model_fqn: str, params: dict, sandbox: bool) -> dict:
     return {
-        "model": {"name": model_fqn, "params": {"temperature": 0}},
+        "model": {"name": model_fqn, "params": params},
         "instructions": PROMPT,
         "mcp_servers": [
             {
@@ -81,21 +119,14 @@ def main() -> None:
         }})
     print(f"Sandbox: {'on (Daytona)' if daytona_key else 'off (no DAYTONA_API_KEY)'}")
 
-    missing = [v for v in ("TFY_GATEWAY_BASE_URL", "TFY_API_KEY", "TFY_MODEL_ID") if not env(v)]
-    if missing:
-        sys.exit(f"Skipping model provider and agent: set {', '.join(missing)} in .env")
+    provider = env("MODEL_PROVIDER", "openai")
+    manifest, properties = provider_manifest(client, provider)
+    put(client, "/settings/model-providers", {"manifest": manifest})
+    model_fqn = f"{provider}/{manifest['models'][0]['name']}"
+    params = model_params(properties)
+    print(f"Model: {model_fqn} {params}")
 
-    model_id = env("TFY_MODEL_ID")
-    put(client, "/settings/model-providers", {"manifest": {
-        "type": "truefoundry",
-        "base_url": env("TFY_GATEWAY_BASE_URL"),
-        "auth": {"api_key": env("TFY_API_KEY")},
-        "models": [{"model_id": model_id, "name": model_name(model_id), "properties": {}}],
-    }})
-    model_fqn = f"truefoundry/{model_name(model_id)}"
-    print(f"Model provider: truefoundry, model {model_fqn}")
-
-    spec = build_spec(model_fqn, sandbox=bool(daytona_key))
+    spec = build_spec(model_fqn, params, sandbox=bool(daytona_key))
     existing = next((a for a in client.get("/agents").json()["data"] if a["name"] == AGENT_NAME), None)
     if existing:
         put(client, f"/agents/{existing['id']}", {"manifest": spec})
