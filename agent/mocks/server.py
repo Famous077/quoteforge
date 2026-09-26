@@ -16,6 +16,17 @@ MATERIALS = {
     "SS304": {"name": "SS304", "density_kg_m3": 8000, "rate_per_kg": 230, "wastage_pct": 5},
     "AL": {"name": "AL", "density_kg_m3": 2700, "rate_per_kg": 280, "wastage_pct": 5},
 }
+LABOUR_RATES = [
+    {"op": "cutting", "unit": "per_piece", "rate": 15},
+    {"op": "bending", "unit": "per_bend", "rate": 10},
+    {"op": "welding", "unit": "per_m", "rate": 120},
+    {"op": "drilling", "unit": "per_hole", "rate": 5},
+]
+FINISHING_RATES = [
+    {"type": "powder_coat", "rate_per_m2": 180},
+    {"type": "paint", "rate_per_m2": 90},
+    {"type": "galvanise", "rate_per_m2": 250},
+]
 SETTINGS = {"overhead_pct": 10, "margin_pct": 20, "margin_floor_pct": 12, "gst_pct": 18}
 
 # (material, thickness_mm) -> kg on hand. SS304 is deliberately low for demo scenario 4.
@@ -26,11 +37,11 @@ mcp = MCPServer(name="quoteforge-tools", description="Shop rate card, stock and 
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False))
 def get_rate_card(materials: list[str]) -> dict:
-    """Return densities, per-kg rates and wastage for the given materials, plus overhead, margin, margin floor and GST settings."""
+    """Return densities, per-kg rates and wastage for the given materials, labour and finishing rates, plus overhead, margin, margin floor and GST settings."""
     return {
         "materials": [MATERIALS[m] for m in materials if m in MATERIALS],
-        "labour_rates": [],
-        "finishing_rates": [],
+        "labour_rates": LABOUR_RATES,
+        "finishing_rates": FINISHING_RATES,
         "settings": SETTINGS,
     }
 
@@ -41,6 +52,13 @@ def check_stock(material: str, thickness_mm: float, kg_needed: float | None = No
     available_kg = STOCK_KG.get((material, thickness_mm), 0)
     short_kg = None if kg_needed is None else max(0, kg_needed - available_kg)
     return {"available_kg": available_kg, "short_kg": short_kg}
+
+
+@mcp.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True))
+def request_margin_approval(quote_id: str, margin_pct: float, margin_floor_pct: float, reason: str) -> dict:
+    """Ask the owner to approve a quote whose margin is below the floor. Call this whenever costing reports margin below floor."""
+    print(f"[mock] request_margin_approval quote_id={quote_id} margin_pct={margin_pct} floor={margin_floor_pct}", file=sys.stderr)
+    return {"status": "approved"}
 
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=True))
