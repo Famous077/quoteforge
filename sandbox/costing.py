@@ -3,6 +3,7 @@
 Run: python3 costing.py < input.json                 full breakdown
      python3 costing.py --weight-only < input.json   weights and kg_needed for the stock check
      python3 costing.py --wastage-mode nesting ...   material from whole sheets instead of flat wastage
+     python3 costing.py --price-at-target ...        margin solved so the total equals target_price
 Input: {"spec": <spec JSON>, "rate_card": <get_rate_card output>}
 Exit code 1 when the self-check fails; the JSON still prints with the reasons.
 """
@@ -143,7 +144,20 @@ def self_check(breakdown: dict) -> list[str]:
     return errors
 
 
-def compute(spec: dict, rate_card: dict, wastage_mode: str = "flat") -> dict:
+def split_target(total: Decimal, g: Decimal) -> tuple[Decimal, Decimal]:
+    """Split a GST-inclusive total into (price before GST, GST) that sum to it exactly.
+
+    Prefers a split where GST is exactly the rounded rate on the base; if paise rounding makes that
+    impossible, GST takes the one-paisa difference.
+    """
+    base = money(total / (1 + g))
+    for candidate in (base, base - PAISE, base + PAISE, base - 2 * PAISE, base + 2 * PAISE):
+        if candidate + money(candidate * g) == total:
+            return candidate, money(candidate * g)
+    return base, total - base
+
+
+def compute(spec: dict, rate_card: dict, wastage_mode: str = "flat", price_at_target: bool = False) -> dict:
     rates = index_rates(rate_card)
     settings = rates[3]
     items, errors = [], []
@@ -155,26 +169,37 @@ def compute(spec: dict, rate_card: dict, wastage_mode: str = "flat") -> dict:
     o, m, g, floor = pct(settings["overhead_pct"]), pct(settings["margin_pct"]), pct(settings["gst_pct"]), pct(settings["margin_floor_pct"])
     subtotal = sum((i["item_cost"] for i in items), Decimal(0))
     overhead = money(subtotal * o)
-    margin = money((subtotal + overhead) * m)
-    before_gst = subtotal + overhead + margin
-    gst = money(before_gst * g)
-    for item in items:
-        item["unit_price_before_gst"] = money(item["item_cost"] * (1 + o) * (1 + m) / dec(item["qty"]))
+    cost_with_overhead = subtotal + overhead
 
     # target_price is the customer's order total including GST.
     target = spec.get("target_price")
+    if price_at_target:
+        if target is None:
+            raise InputError("--price-at-target needs target_price in the spec")
+        before_gst, gst = split_target(money(dec(target)), g)
+        margin = before_gst - cost_with_overhead  # absorbs rounding so lines sum to the target exactly
+        margin_pct = (margin / cost_with_overhead * 100).quantize(PAISE, rounding=ROUND_HALF_UP)
+    else:
+        margin = money(cost_with_overhead * m)
+        margin_pct = settings["margin_pct"]
+        before_gst = cost_with_overhead + margin
+        gst = money(before_gst * g)
+    for item in items:
+        item["unit_price_before_gst"] = money(item["item_cost"] * (1 + o) * (1 + margin / cost_with_overhead) / dec(item["qty"]))
+
     effective = None
     if target is not None:
-        effective = (dec(target) / (1 + g) / (subtotal + overhead) - 1) * 100
+        effective = (dec(target) / (1 + g) / cost_with_overhead - 1) * 100
     below_floor = m < floor or (effective is not None and effective < floor * 100)
 
     breakdown = {
         "customer": spec.get("customer"),
         "wastage_mode": wastage_mode,
+        "priced_at_target": price_at_target,
         "items": items,
         "cost_subtotal": subtotal,
         "overhead": {"pct": settings["overhead_pct"], "amount": overhead},
-        "margin": {"pct": settings["margin_pct"], "amount": margin},
+        "margin": {"pct": margin_pct, "amount": margin},
         "price_before_gst": before_gst,
         "gst": {"pct": settings["gst_pct"], "amount": gst},
         "total": before_gst + gst,
@@ -217,13 +242,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--weight-only", action="store_true")
     parser.add_argument("--wastage-mode", choices=["flat", "nesting"], default="flat")
+    parser.add_argument("--price-at-target", action="store_true", help="solve margin so the total equals target_price")
     args = parser.parse_args()
     data = json.load(sys.stdin)
     try:
         if args.weight_only:
             print(to_json(weights(data["spec"], data["rate_card"], args.wastage_mode)))
             return 0
-        breakdown = compute(data["spec"], data["rate_card"], args.wastage_mode)
+        breakdown = compute(data["spec"], data["rate_card"], args.wastage_mode, args.price_at_target)
     except (InputError, KeyError, ValueError) as e:
         print(to_json({"self_check": {"passed": False, "errors": [f"invalid input: {e}"]}}))
         return 1

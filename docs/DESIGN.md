@@ -218,10 +218,13 @@ L, B, T in mm, rho in kg/m3, q = quantity, w = wastage, o = overhead, m = margin
 
 Money is rounded to paise per line, so line items add up exactly to every total. `unit_price_before_gst` is for display only and is not part of any sum.
 
+`priced_at_target` is false for standard pricing. After the owner approves a below-floor margin, the agent re-runs with `--price-at-target`: the margin is solved so `total` equals `target_price` exactly (the margin line absorbs paise rounding), `margin.pct` shows the effective margin and `priced_at_target` is true. Scenario 3 at target: margin Rs 554.77 (8.14%), price before GST Rs 7,372.88, GST Rs 1,327.12, total Rs 8,700.00.
+
 ```json
 {
   "customer": "Sharma Industries",
   "wastage_mode": "flat",
+  "priced_at_target": false,
   "items": [{
     "name": "L bracket", "material": "MS", "qty": 50,
     "dimensions_mm": [200, 100, 8],

@@ -26,6 +26,9 @@ Write one JSON file with the spec and the rate card exactly as `get_rate_card` r
    `python3 costing.py < input.json`
 3. Read `self_check`. Exit code 1 means it failed; `self_check.errors` says why.
 4. Read `margin_check`. `below_floor: true` means the owner must approve the margin.
+5. Only after the owner approves a below-floor margin, price the quote at the customer's target:
+   `python3 costing.py --price-at-target < input.json`
+   The margin is solved so `total` equals `target_price` exactly; `priced_at_target` is true and `margin.pct` is the effective margin.
 
 ## Notes
 

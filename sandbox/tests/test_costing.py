@@ -3,8 +3,10 @@ import subprocess
 import sys
 from decimal import Decimal
 
+import pytest
+
 from conftest import SANDBOX
-from costing import compute, self_check, weights
+from costing import InputError, compute, self_check, weights
 
 
 def item(breakdown):
@@ -56,6 +58,42 @@ def test_target_price_below_floor(scenario1):
     check = compute(scenario1["spec"], scenario1["rate_card"])["margin_check"]
     assert check["effective_margin_pct"] == Decimal("8.14")
     assert check["below_floor"]
+
+
+def test_price_at_target_scenario3(scenario1):
+    scenario1["spec"]["target_price"] = 8700
+    b = compute(scenario1["spec"], scenario1["rate_card"], price_at_target=True)
+    assert b["priced_at_target"]
+    assert b["total"] == Decimal("8700.00")
+    assert b["margin"]["pct"] == Decimal("8.14")
+    assert b["margin_check"]["effective_margin_pct"] == Decimal("8.14")
+    assert b["cost_subtotal"] == Decimal("6198.28")  # costs unchanged, only margin moves
+    assert b["price_before_gst"] + b["gst"]["amount"] == b["total"]
+    assert b["self_check"]["passed"]
+
+
+def test_price_at_target_sums_exactly_for_any_target(scenario1):
+    for paise in range(870000, 870200):
+        scenario1["spec"]["target_price"] = paise / 100
+        b = compute(scenario1["spec"], scenario1["rate_card"], price_at_target=True)
+        assert b["total"] == Decimal(paise) / 100
+        assert b["self_check"]["passed"], b["self_check"]["errors"]
+
+
+def test_price_at_target_below_cost_fails_self_check(scenario1):
+    scenario1["spec"]["target_price"] = 5000  # below cost + overhead
+    b = compute(scenario1["spec"], scenario1["rate_card"], price_at_target=True)
+    assert not b["self_check"]["passed"]
+    assert any("margin is negative" in e for e in b["self_check"]["errors"])
+
+
+def test_price_at_target_needs_target(scenario1):
+    with pytest.raises(InputError):
+        compute(scenario1["spec"], scenario1["rate_card"], price_at_target=True)
+
+
+def test_standard_pricing_not_priced_at_target(scenario1):
+    assert compute(scenario1["spec"], scenario1["rate_card"])["priced_at_target"] is False
 
 
 def test_self_check_catches_bad_sums_and_negatives(scenario1):
