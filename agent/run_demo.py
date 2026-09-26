@@ -1,6 +1,6 @@
 """Run a demo scenario through the saved QuoteForge agent and stop at the first approval gate.
 
-Run: uv run run_demo.py [--scenario 1|3] [--approve | --deny]
+Run: uv run run_demo.py [--scenario 1|3] [--approve | --deny] [--session ID]
 Without a decision flag the run stops at the first gate and nothing is sent.
 With one, every gate in the run gets that decision.
 """
@@ -114,7 +114,8 @@ def print_breakdown(b: dict) -> None:
     print(f"   {'GST ' + str(b['gst']['pct']) + '%':<61} {rs(b['gst']['amount'])}")
     print(f"   {'TOTAL':<61} {rs(b['total'])}")
     mc, sc = b["margin_check"], b["self_check"]
-    print(f"   Margin check: effective {mc['effective_margin_pct']}% vs floor {mc['margin_floor_pct']}%, below floor: {mc['below_floor']}")
+    effective = "n/a (no target price)" if mc["effective_margin_pct"] is None else f"{mc['effective_margin_pct']}%"
+    print(f"   Margin check: effective {effective} vs floor {mc['margin_floor_pct']}%, below floor: {mc['below_floor']}")
     print(f"   Self-check: {'passed' if sc['passed'] else 'FAILED ' + '; '.join(sc['errors'])}")
 
 
@@ -128,15 +129,16 @@ def main() -> None:
     decision = parser.add_mutually_exclusive_group()
     decision.add_argument("--approve", action="store_true", help="allow every gated call")
     decision.add_argument("--deny", action="store_true", help="deny every gated call")
+    parser.add_argument("--session", help="reuse a session (e.g. one warmed by warmup.py) instead of opening a new one")
     args = parser.parse_args()
 
     client = TrueForge(base_url=os.environ.get("TRUEFORGE_BASE_URL") or "http://localhost:8790", timeout=600)
-    session = client.sessions.create(agent={"name": AGENT_NAME})
+    session_id = args.session or client.sessions.create(agent={"name": AGENT_NAME}).data.id
     enquiry = SCENARIOS[args.scenario]
-    print(f"Session {session.data.id}\n\nScenario {args.scenario} enquiry:\n{enquiry}")
+    print(f"Session {session_id}\n\nScenario {args.scenario} enquiry:\n{enquiry}")
 
     events: dict = {}
-    pending = stream_turn(client, session.data.id, [{"type": "user.message", "content": f"{enquiry}\n\n{QUOTE_ID_NOTE}"}], events)
+    pending = stream_turn(client, session_id, [{"type": "user.message", "content": f"{enquiry}\n\n{QUOTE_ID_NOTE}"}], events)
     first = gates(events, pending)
 
     responses = [e for e in events.values() if e.type == "tool.response"]
@@ -175,7 +177,7 @@ def main() -> None:
         pending_gates = first
         while pending_gates:
             print(f"\nOwner decision on {', '.join(g[2] for g in pending_gates)}: {approval['status']}")
-            pending = stream_turn(client, session.data.id, [
+            pending = stream_turn(client, session_id, [
                 {"type": "user.tool_approval", "thread_id": thread_id, "tool_call_id": call_id, "approval": approval}
                 for thread_id, call_id, _, _ in pending_gates
             ], events)
@@ -183,7 +185,31 @@ def main() -> None:
             for _, _, name, call_args in pending_gates:
                 print(f"\nPAUSED before {name}({call_args})")
 
+        if sandbox and args.scenario == 3:
+            ok = check_scenario3_outcome(events, approved=args.approve) and ok
+
     sys.exit(0 if ok else 1)
+
+
+def check_scenario3_outcome(events: dict, approved: bool) -> bool:
+    """After the gates: approve must send the quote priced at target; deny must keep the standard draft."""
+    responses = [e for e in events.values() if e.type == "tool.response"]
+    sent_at = next((i for i, e in enumerate(responses) if find_call(events, e.tool_call_id)[0] == "send_quote" and "sent" in str(e.content)), None)
+    at_target = [(i, b) for i, e in enumerate(responses) if (b := find_breakdown(e.content)) and b.get("priced_at_target")]
+
+    if approved:
+        before_send = [b for i, b in at_target if sent_at is not None and i < sent_at]
+        checks = {
+            "quote sent": sent_at is not None,
+            "sent quote priced at target: total 8700.00, margin 8.14%": any(
+                b["total"] == 8700 and b["margin"]["pct"] == 8.14 and b["self_check"]["passed"] for b in before_send),
+        }
+    else:
+        checks = {"quote not sent": sent_at is None, "not priced at target (draft at standard price)": not at_target}
+    print("\n=== Outcome ===")
+    for label, passed in checks.items():
+        print(f"  [{'x' if passed else ' '}] {label}")
+    return all(checks.values())
 
 
 if __name__ == "__main__":
