@@ -1,0 +1,84 @@
+import json
+import subprocess
+import sys
+from decimal import Decimal
+
+from conftest import SANDBOX
+from costing import compute, self_check, weights
+
+
+def item(breakdown):
+    return breakdown["items"][0]
+
+
+def test_scenario1_hand_check(scenario1):
+    b = compute(scenario1["spec"], scenario1["rate_card"])
+    assert item(b)["weight_kg_per_piece"] == Decimal("1.256")
+    assert item(b)["weight_kg_total"] == Decimal("62.8")
+    material = item(b)["line_items"][0]
+    assert material["label"] == "Material"
+    assert round(material["amount"]) == 4088
+    assert item(b)["nesting"]["parts_per_sheet"] == 150
+    assert b["self_check"]["passed"]
+
+
+def test_scenario1_totals(scenario1):
+    b = compute(scenario1["spec"], scenario1["rate_card"])
+    # Material 4088.28 + cutting 750 + bending 500 + drilling 500 + powder coat 360
+    assert b["cost_subtotal"] == Decimal("6198.28")
+    assert b["total"] == Decimal("9654.44")
+    assert not b["margin_check"]["below_floor"]
+
+
+def test_kg_needed_includes_wastage(scenario1):
+    w = weights(scenario1["spec"], scenario1["rate_card"])
+    assert item(w)["kg_needed"] == Decimal("65.94")
+
+
+def test_nesting_mode_leaves_flat_hand_check_alone(scenario1):
+    nested = compute(scenario1["spec"], scenario1["rate_card"], wastage_mode="nesting")
+    # One full 1250 x 2500 x 8 mm MS sheet = 196.25 kg
+    assert item(nested)["kg_needed"] == Decimal("196.25")
+    flat = compute(scenario1["spec"], scenario1["rate_card"])
+    assert round(item(flat)["line_items"][0]["amount"]) == 4088
+
+
+def test_no_finish_and_no_ops_is_valid(scenario1):
+    spec = scenario1["spec"]
+    spec["items"][0].update(finish="none", ops={})
+    b = compute(spec, scenario1["rate_card"])
+    assert [line["label"] for line in item(b)["line_items"]] == ["Material"]
+    assert b["self_check"]["passed"]
+
+
+def test_target_price_below_floor(scenario1):
+    scenario1["spec"]["target_price"] = 8700
+    check = compute(scenario1["spec"], scenario1["rate_card"])["margin_check"]
+    assert check["effective_margin_pct"] == Decimal("8.14")
+    assert check["below_floor"]
+
+
+def test_self_check_catches_bad_sums_and_negatives(scenario1):
+    b = compute(scenario1["spec"], scenario1["rate_card"])
+    b["items"][0]["line_items"][1]["amount"] = Decimal("-1")
+    b["total"] += 1
+    errors = self_check(b)
+    assert any("negative" in e for e in errors)
+    assert any("item cost" in e for e in errors)
+    assert any("total does not equal" in e for e in errors)
+
+
+def test_self_check_flags_insane_weight(scenario1):
+    scenario1["spec"]["items"][0].update(length_mm=2000, width_mm=1000, thickness_mm=200)  # 3140 kg per piece
+    b = compute(scenario1["spec"], scenario1["rate_card"])
+    assert not b["self_check"]["passed"]
+    assert any("weight" in e for e in b["self_check"]["errors"])
+
+
+def test_cli_exit_codes(scenario1):
+    ok = subprocess.run([sys.executable, "costing.py"], cwd=SANDBOX, input=json.dumps(scenario1), capture_output=True, text=True)
+    assert ok.returncode == 0 and json.loads(ok.stdout)["total"] == 9654.44
+
+    scenario1["spec"]["items"][0]["material"] = "Titanium"
+    bad = subprocess.run([sys.executable, "costing.py"], cwd=SANDBOX, input=json.dumps(scenario1), capture_output=True, text=True)
+    assert bad.returncode == 1 and not json.loads(bad.stdout)["self_check"]["passed"]

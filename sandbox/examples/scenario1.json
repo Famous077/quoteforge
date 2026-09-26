@@ -1,0 +1,30 @@
+{
+  "spec": {
+    "customer": "Sharma Industries",
+    "items": [{
+      "name": "L bracket",
+      "material": "MS",
+      "length_mm": 200, "width_mm": 100, "thickness_mm": 8,
+      "qty": 50,
+      "ops": {"cutting": 1, "bends": 1, "weld_m": 0, "holes": 2},
+      "finish": "powder_coat"
+    }],
+    "target_price": null,
+    "missing": []
+  },
+  "rate_card": {
+    "materials": [{"name": "MS", "density_kg_m3": 7850, "rate_per_kg": 62, "wastage_pct": 5}],
+    "labour_rates": [
+      {"op": "cutting", "unit": "per_piece", "rate": 15},
+      {"op": "bending", "unit": "per_bend", "rate": 10},
+      {"op": "welding", "unit": "per_m", "rate": 120},
+      {"op": "drilling", "unit": "per_hole", "rate": 5}
+    ],
+    "finishing_rates": [
+      {"type": "powder_coat", "rate_per_m2": 180},
+      {"type": "paint", "rate_per_m2": 90},
+      {"type": "galvanise", "rate_per_m2": 250}
+    ],
+    "settings": {"overhead_pct": 10, "margin_pct": 20, "margin_floor_pct": 12, "gst_pct": 18}
+  }
+}
