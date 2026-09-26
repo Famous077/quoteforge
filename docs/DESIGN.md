@@ -160,6 +160,8 @@ Six tools, four DB tables, one costing script, one state machine. Tool registrat
 
 **Seed values (dummy):** MS 7850 kg/m3 at Rs 62/kg, SS304 8000 kg/m3 at Rs 230/kg, AL 2700 kg/m3 at Rs 280/kg, wastage 5%, overhead 10%, margin 20%, margin floor 12%, GST 18%.
 
+Labour: cutting Rs 15/piece, bending Rs 10/bend, welding Rs 120/m, drilling Rs 5/hole. Finishing: powder coat Rs 180/m2, paint Rs 90/m2, galvanise Rs 250/m2.
+
 ### Spec JSON (output of extraction)
 
 ```json
@@ -188,6 +190,7 @@ If `missing` is not empty, the agent stops and returns one clarification questio
 | check\_stock | material, thickness, kg needed | available\_kg, short\_kg | No |
 | run\_code | Python source | stdout (JSON breakdown) | No, sandboxed |
 | make\_quote\_pdf | quote JSON | pdf\_path | No |
+| request\_margin\_approval | quote\_id, margin\_pct, margin\_floor\_pct, reason | approved status | **Yes, gated** (called only when margin is below floor) |
 | send\_quote | quote\_id, email | sent status | **Yes, gated** |
 | create\_po (stretch) | material, qty | po\_id | **Yes, gated** |
 
@@ -208,6 +211,42 @@ P = (C_{mat} + C_{lab} + C_{fin}) \times (1 + o) \times (1 + m) \times (1 + g)
 L, B, T in mm, rho in kg/m3, q = quantity, w = wastage, o = overhead, m = margin (markup on cost), g = GST. Labour = sum of op counts x rate x qty. Finish = surface area (both faces, m2) x rate x qty.
 
 **Hand check, scenario 1:** 200 x 100 x 8 mm MS = 1.256 kg per piece, 62.8 kg for 50, material Rs 4,088 with 5% wastage. The script must match this.
+
+`target_price` in the spec is the customer's order total including GST. Effective margin at that price = target / (1 + g) / (C × (1 + o)) − 1. Scenario 3 uses scenario 1 with a target of Rs 8,700, which gives 8.14%, below the 12% floor.
+
+### Costing breakdown JSON (output of `sandbox/costing.py`, input to `make_quote_pdf`)
+
+Money is rounded to paise per line, so line items add up exactly to every total. `unit_price_before_gst` is for display only and is not part of any sum.
+
+```json
+{
+  "customer": "Sharma Industries",
+  "wastage_mode": "flat",
+  "items": [{
+    "name": "L bracket", "material": "MS", "qty": 50,
+    "dimensions_mm": [200, 100, 8],
+    "weight_kg_per_piece": 1.256, "weight_kg_total": 62.8, "kg_needed": 65.94,
+    "nesting": {"sheet_mm": [1250, 2500], "parts_per_sheet": 150, "orientation": "as_given", "sheets_needed": 1, "scrap_pct": 68.0},
+    "line_items": [
+      {"label": "Material", "detail": "62.8 kg MS @ Rs 62/kg + 5% wastage", "amount": 4088.28},
+      {"label": "Cutting", "detail": "50 x 1 @ Rs 15 per_piece", "amount": 750},
+      {"label": "Bending", "detail": "50 x 1 @ Rs 10 per_bend", "amount": 500},
+      {"label": "Drilling", "detail": "50 x 2 @ Rs 5 per_hole", "amount": 500},
+      {"label": "Finishing", "detail": "powder_coat, 2 m2 (both faces) @ Rs 180/m2", "amount": 360}
+    ],
+    "item_cost": 6198.28,
+    "unit_price_before_gst": 163.63
+  }],
+  "cost_subtotal": 6198.28,
+  "overhead": {"pct": 10, "amount": 619.83},
+  "margin": {"pct": 20, "amount": 1363.62},
+  "price_before_gst": 8181.73,
+  "gst": {"pct": 18, "amount": 1472.71},
+  "total": 9654.44,
+  "margin_check": {"margin_floor_pct": 12, "target_price": null, "effective_margin_pct": null, "below_floor": false},
+  "self_check": {"passed": true, "errors": []}
+}
+```
 
 ### Agent states
 
