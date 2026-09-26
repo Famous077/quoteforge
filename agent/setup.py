@@ -16,7 +16,12 @@ load_dotenv(ROOT / ".env")
 
 AGENT_NAME = "quoteforge"
 TOOLS_SERVER = "quoteforge-tools"
+COSTING_SKILL = "quoteforge-costing"
 PROMPT = (Path(__file__).parent / "prompts" / "system.md").read_text()
+NO_SANDBOX_NOTE = """
+## No sandbox in this deployment
+
+The costing skill is unavailable. Call `check_stock` with `kg_needed: null`, log that stock was checked without a required quantity, and do not produce quote numbers."""
 
 
 def env(name: str, default: str = "") -> str:
@@ -69,13 +74,15 @@ def model_params(properties: dict) -> dict:
 def build_spec(model_fqn: str, params: dict, sandbox: bool) -> dict:
     return {
         "model": {"name": model_fqn, "params": params},
-        "instructions": PROMPT,
+        "instructions": PROMPT if sandbox else PROMPT + NO_SANDBOX_NOTE,
+        # Skills run inside the sandbox, so they can only be attached when it is on.
+        "skills": [{"name": COSTING_SKILL}] if sandbox else [],
         "mcp_servers": [
             {
                 "name": TOOLS_SERVER,
                 "enable_tools": ["@all"],
                 # Named explicitly so the gate holds even if a server drops its annotations.
-                "require_approval_for_tools": ["@destructive", "send_quote", "create_po"],
+                "require_approval_for_tools": ["@destructive", "send_quote", "create_po", "request_margin_approval"],
                 "preload": True,
             }
         ],
@@ -117,6 +124,17 @@ def main() -> None:
             "auto_archive_interval_in_minutes": 60,
             "auto_delete_interval_in_minutes": 7200,
         }})
+        # The skill is cloned from git into the sandbox, so sandbox/ changes need a push first.
+        skill_ref = env("SKILL_REF", "main")
+        put(client, "/settings/skills", {"manifest": {
+            "type": "git",
+            "name": COSTING_SKILL,
+            "url": env("SKILL_REPO_URL", "https://github.com/aashu2006/quoteforge"),
+            "path": "sandbox",
+            "ref": skill_ref,
+            "description": "Tested costing script for every quote number: weights, kg needed, full price breakdown with self-check.",
+        }})
+        print(f"Skill '{COSTING_SKILL}' @ {skill_ref}")
     print(f"Sandbox: {'on (Daytona)' if daytona_key else 'off (no DAYTONA_API_KEY)'}")
 
     provider = env("MODEL_PROVIDER", "openai")
