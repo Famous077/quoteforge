@@ -1,0 +1,56 @@
+"""Mock shop tools served over MCP, matching the LLD tool contracts.
+
+Swapped for the real tools server by changing TOOLS_MCP_URL.
+Run: uv run mocks/server.py [--port 8801]
+"""
+
+import argparse
+import sys
+
+from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
+
+# Seed values from DESIGN.md (dummy data).
+MATERIALS = {
+    "MS": {"name": "MS", "density_kg_m3": 7850, "rate_per_kg": 62, "wastage_pct": 5},
+    "SS304": {"name": "SS304", "density_kg_m3": 8000, "rate_per_kg": 230, "wastage_pct": 5},
+    "AL": {"name": "AL", "density_kg_m3": 2700, "rate_per_kg": 280, "wastage_pct": 5},
+}
+SETTINGS = {"overhead_pct": 10, "margin_pct": 20, "margin_floor_pct": 12, "gst_pct": 18}
+
+# (material, thickness_mm) -> kg on hand. SS304 is deliberately low for demo scenario 4.
+STOCK_KG = {("MS", 8): 500, ("SS304", 3): 20}
+
+mcp = MCPServer(name="quoteforge-tools", description="Shop rate card, stock and quote sending (mock).")
+
+
+@mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False))
+def get_rate_card(materials: list[str]) -> dict:
+    """Return densities, per-kg rates and wastage for the given materials, plus overhead, margin, margin floor and GST settings."""
+    return {
+        "materials": [MATERIALS[m] for m in materials if m in MATERIALS],
+        "labour_rates": [],
+        "finishing_rates": [],
+        "settings": SETTINGS,
+    }
+
+
+@mcp.tool(annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False))
+def check_stock(material: str, thickness_mm: float, kg_needed: float | None = None) -> dict:
+    """Return kg available for a material and thickness, and how many kg short the job is (null if kg_needed is not given)."""
+    available_kg = STOCK_KG.get((material, thickness_mm), 0)
+    short_kg = None if kg_needed is None else max(0, kg_needed - available_kg)
+    return {"available_kg": available_kg, "short_kg": short_kg}
+
+
+@mcp.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=True))
+def send_quote(quote_id: str, email: str) -> dict:
+    """Send a finalised quote to the customer. Irreversible: a sent price is a commitment."""
+    print(f"[mock] send_quote quote_id={quote_id} email={email}", file=sys.stderr)
+    return {"status": "sent"}
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8801)
+    mcp.run("streamable-http", port=parser.parse_args().port)
