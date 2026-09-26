@@ -45,6 +45,9 @@ def stream_turn(client: TrueForge, session_id: str, turn_input: list, events: di
             print(f"\n-> {name}({args})\n<- {event.content}")
         elif event.type == "tool.approval_required":
             pending.append(event)
+        elif event.type == "tool.response_required":
+            for ref in event.tool_calls:
+                print(f"\nAgent asked: {find_call(events, ref.id)[1]}")
         elif event.type == "turn.done":
             state = event.state
             if state.status != "done":
